@@ -15,6 +15,7 @@
     "@google-cloud/aiplatform": "^3.9.0",
     "@google-cloud/dialogflow": "^6.2.0",
     "@google-cloud/speech": "^6.1.0",
+    "@google-cloud/text-to-speech": "^5.0.1",
     "@google-cloud/vertexai": "github:googleapis/nodejs-vertexai",
     "audio-buffer": "^5.0.0",
     "bard-ai": "^2.0.3",

@@ -1,21 +1,18 @@
-// require('dotenv').config();
-
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const upload = multer();
 const fetch = require('node-fetch');
 const { marked } = require('marked');
-
 const { VertexAI } = require("@google-cloud/vertexai");
-// const dialogflow = require('@google-cloud/dialogflow');
-// const { SessionsClient } = require('@google-cloud/dialogflow');
+const fs = require('fs');
 
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('ffmpeg-static');
 const stream = require('stream');
 
 const { SpeechClient } = require('@google-cloud/speech');
+const textToSpeech = require('@google-cloud/text-to-speech')
 const bodyParser = require('body-parser');
 const app = express();
 const port = 3000;
@@ -27,8 +24,10 @@ const corsOptions = {
 app.use(bodyParser.raw({ type: 'audio/ogg', limit: '10mb' }));
 app.use(bodyParser.json()); 
 app.use(cors(corsOptions));
+app.use(express.static('public'));
 
 const speechClient = new SpeechClient();
+const TTSclient = new textToSpeech.TextToSpeechClient()
 
 // SPEECH-TO-TEXT
 app.post('/transcribe', upload.single('audio'), async (req, res) => {
@@ -55,8 +54,9 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
     const transcription = response.results
       .map(result => result.alternatives[0].transcript)
       .join('\n');
-
+    
     res.send({ transcription });
+    // res.send({ transcription: "How many feet are in a mile" }); // 1 click testing so you don't have to talk
 
   } catch (error) {
     console.error('Error:', error);
@@ -65,56 +65,43 @@ app.post('/transcribe', upload.single('audio'), async (req, res) => {
 });
 
 
-// AI
 app.post('/ai-response', async (req, res) => {
-  const model = 'gemini-pro';
-  const projectId = 'bardr-agent-ukxi';
-  const location = 'us-central1';
-  const image = 'gs://generativeai-downloads/images/scones.jpg'; // Google Cloud Storage image
-  const mimeType = 'image/jpeg';
-  const vertexAI = new VertexAI({project: projectId, location: location});
-  const generativeVisionModel = vertexAI.preview.getGenerativeModel({
-    model: model, 
-  });
+  try {
+    const vertexAI = new VertexAI({ project: 'bardr-ring', location: 'us-central1' });
+    const generativeModel = vertexAI.preview.getGenerativeModel({ model: 'gemini-pro' });
+    const chat = generativeModel.startChat({});
+    const chatInput1 = req.body.transcription;
+    const responseStream = await chat.sendMessageStream(chatInput1);
+    const aggregatedResponse = await responseStream.response;
+    const fullTextResponse = aggregatedResponse.candidates[0].content.parts[0].text;
+    const htmlText = marked(fullTextResponse);
 
-  // For images, the SDK supports both Google Cloud Storage URI and base64 strings
-  // const filePart = {
-  //   fileSata: {
-  //     fileUri: image,
-  //     mimeType: mimeType,
-  //   },
-  // };
+    // AUDIO RESPONDER
+    const request = {
+      input: { text: fullTextResponse },
+      voice: { languageCode: 'en-US', ssmlGender: 'NEUTRAL' },
+      audioConfig: { audioEncoding: 'MP3' },
+    };
+    const [response] = await TTSclient.synthesizeSpeech(request);
+    // console.log('Response from TTSclient:', response); 
 
-// Dialogflow version ///////////////////////
-// const projectId = 'bardr-agent-ukxi';//"bardr-ring";
-// const uuid = require('uuid');
-// const sessionId = uuid.v4(); 
-// const client = new dialogflow.SessionsClient({ projectId });
-// const client = new SessionsClient({ projectId });
+    if (response.audioContent) {
+      fs.writeFile(`public/output.mp3`, response.audioContent, (err) => {
+        if (err) {
+          console.error('Error writing audio file:', err);
+          return;
+        }
+      });
+      res.json({ aiTextResponse: htmlText, audioContent: 'http://localhost:3000/output.mp3' });
 
-// // Define the session and query
-// const sessionPath = client.sessionPath(projectId, sessionId);
-// const query = { text: req.body.transcription };
-// const fullTextResponse = await client.detectIntent({ sessionPath, query });
-//////////////////////////////////////////////
+    } else {
+      res.json({ aiTextResponse: htmlText });
+    }
 
-  console.log(req.body.transcription);
-  const textPart = { text: req.body.transcription };
-  const ai_request = {
-    // contents: [{role: 'user', parts: [textPart, filePart]}],
-    contents: [{role: 'user', parts: [textPart]}],
-  };
-
-  console.log('Prompt Text:', ai_request.contents[0].parts[0].text);
-  console.log('Non-Streaming Response Text:');
-
-  const responseStream = await generativeVisionModel.generateContentStream(ai_request);
-  const aggregatedResponse = await responseStream.response; 
-  const fullTextResponse = aggregatedResponse.candidates[0].content.parts[0].text;
-  console.log(fullTextResponse);
-
-  const htmlText = marked(fullTextResponse);
-  res.send({ aiResponse: htmlText });
+  } catch (error) {
+    console.error('Server Error:', error);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
 });
 
 
@@ -123,12 +110,11 @@ app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
 
-
 async function convertAudioToLinear16(audioBuffer) {
   return new Promise((resolve, reject) => {
-    console.log('Buffer type:', typeof audioBuffer);
-    console.log('Buffer instance:', audioBuffer instanceof Buffer);
-    console.log('Buffer length:', audioBuffer.length);
+    // console.log('Buffer type:', typeof audioBuffer);
+    // console.log('Buffer instance:', audioBuffer instanceof Buffer);
+    // console.log('Buffer length:', audioBuffer.length);
     // console.log('Buffer content (snippet):', audioBuffer.slice(0, 100).toString('hex'));
 
     // Create a readable stream from the buffer
@@ -156,6 +142,3 @@ async function convertAudioToLinear16(audioBuffer) {
       }));
   });
 }
-
-
-
